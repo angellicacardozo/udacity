@@ -12,7 +12,6 @@ import numpy as np
 import seaborn as sns
 import pandas
 from IPython.display import display
-from sklearn.metrics import confusion_matrix
 sns.set(color_codes=True)
 
 # "prior": orders prior to that users most recent order (~3.2m orders)
@@ -30,17 +29,19 @@ print(orders.columns)
 
 # visualize orders products train columns
 print(order_products_train.columns)
+print(' Total orders by user 1 ')
+t_orders_user_1 = orders[orders['user_id']==1]
 
 # select train data from orders dataset
 orders_train = orders[orders['eval_set']=='train']
 
 # merge orders with products data (to have order_id and product_id)
-orders_products_train = pandas.merge(order_products_train, orders_train, on='order_id')
+orders_products_train = pandas.merge(orders_train, order_products_train, on='order_id', how='right')
 print(orders_products_train.columns)
 
 # load users priors orders info
 orders_prior = orders[orders['eval_set']=='prior']
-orders_products_prior = pandas.merge(order_products_prior, orders_prior, on='order_id')
+orders_products_prior = pandas.merge(orders_prior, order_products_prior, on='order_id', how='right')
 print('orders_products_prior')
 print(orders_products_prior.columns)
 
@@ -51,7 +52,7 @@ print('count_orders_by_user')
 print(count_orders_by_user.head(10))
 
 # load products infos
-products_prior = pandas.merge(orders_products_prior, products, on='product_id')
+products_prior = pandas.merge(products, orders_products_prior, on='product_id', how='right')
 print('products_prior : columns')
 print(products_prior.columns)
 
@@ -64,14 +65,14 @@ print('count_items_on_cart : columns')
 print(count_items_on_cart.columns)
 
 # find out the general interest by an item
-count_general_reorder_by_product = products_reordered_prior.groupby(['product_id'])['reordered'].aggregate('count')
-count_general_reorder_by_product = count_general_reorder_by_product.reset_index(name='general_item_reorder_freq')
+count_general_reorder_by_product = orders_products_train.groupby(by=['product_id'], as_index=False)['reordered'].aggregate('count')
+count_general_reorder_by_product = count_general_reorder_by_product.rename(columns={'reordered':'general_item_reorder_freq'})
 print('count_general_reorder_by_product : columns')
 print(count_general_reorder_by_product.columns)
 print(count_general_reorder_by_product.head(10))
 
 # build General User Interest
-orders_products_set = pandas.merge(orders_products_train, count_general_reorder_by_product, on='product_id')
+orders_products_set = pandas.merge(count_general_reorder_by_product, orders_products_train, on='product_id', how='right')
 print(' orders_products_set : columns ')
 print(orders_products_set.columns)
 
@@ -85,13 +86,13 @@ print(count_user_reorder_by_product.columns)
 print(count_user_reorder_by_product.head(10))
 
 # build User Behavior
-user_behavior = pandas.merge(count_items_on_cart, count_orders_by_user, on='user_id')
+user_behavior = pandas.merge(count_items_on_cart, count_orders_by_user, on='user_id', how='right')
 print(' user_behavior : columns ')
 print(user_behavior.columns)
 
 print(' Before merge ')
 print(len(orders_products_set))
-orders_products_set = pandas.merge(orders_products_set, count_user_reorder_by_product, on=('product_id', 'user_id'), how='left')
+orders_products_set = pandas.merge(count_user_reorder_by_product, orders_products_set, on=('product_id', 'user_id'), how='right')
 orders_products_set['count_reordered_by_user'] = orders_products_set[ 'count_reordered_by_user'].fillna(0)
 print(' orders_products_set (count_user_reorder_by_product) : columns ')
 print(orders_products_set.columns)
@@ -99,22 +100,28 @@ print(' After merge ')
 print(len(orders_products_set))
 
 # Build baskets to train
-baskets = pandas.merge(orders_products_set, user_behavior)
+baskets = pandas.merge(user_behavior, orders_products_set, on='user_id', how='right')
+baskets = baskets.drop_duplicates()
 print(' Basket columns')
 print(baskets.columns)
 
 # Training phase
 from sklearn.model_selection import train_test_split
 
-baskets_x = baskets.drop(['eval_set', 'add_to_cart_order', 'reordered', 'days_since_prior_order'], axis=1)
+baskets_x = baskets.drop(['eval_set', 'add_to_cart_order', 'reordered', 'days_since_prior_order', 'count_reordered_by_user'], axis=1)
+baskets_x['count_items_on_cart'] = baskets_x['count_items_on_cart'].fillna(0)
+print('Has NaN ? ')
+print(baskets_x.isna().sum())
 print(' Basket x : columns ')
 print(baskets_x.columns)
 print(baskets_x.head(10))
 
-baskets_y = baskets_x[['reordered']]
+baskets_y = baskets[['reordered']]
 print(' Basket y : columns ')
 print(baskets_y.columns)
 print(baskets_y.head(10))
+
+baskets_y = np.asarray(baskets_y['reordered'])
 
 # extract X_train and y_train
 X_train, X_test, y_train, y_test = train_test_split(baskets_x, baskets_y, test_size=0.2)
@@ -123,7 +130,7 @@ X_train, X_test, y_train, y_test = train_test_split(baskets_x, baskets_y, test_s
 # 1 ) (n_estimators = 10, random_state = 42)
 from sklearn.ensemble import RandomForestClassifier
 classifier = RandomForestClassifier(n_estimators = 24, max_features= 6, random_state = 42)
-classifier.fit(X_train,y_train)
+classifier.fit(X_train, y_train)
 
 # Use the resulting model to predict over the testing baskets
 prediction_result = classifier.predict(X_test)
@@ -135,5 +142,10 @@ print("Accuracy on test set: {:0.5f}".format(classifier.score(X_test, y_test)))
 from sklearn.metrics import classification_report
 print(classification_report(y_test, prediction_result))
 
-cm = confusion_matrix(y_test ,prediction_result)
-print(cm)
+from sklearn.naive_bayes import GaussianNB
+clf = GaussianNB()
+clf.fit(X_train, y_train)
+prediction_clf = clf.predict(X_test)
+print(' Naive Bayes ')
+print("Accuracy on test set: {:0.5f}".format(clf.score(X_test, y_test)))
+print(classification_report(y_test, prediction_clf))
