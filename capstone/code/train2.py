@@ -96,6 +96,7 @@ print(products_preferences.isna().sum())
 
 baskets = pandas.merge(general_user_behavior, products_preferences, on=['user_id'], how='right', validate='one_to_many')
 baskets = pandas.merge(product_user_behavior, baskets, on=['user_id', 'product_id'], how='right')
+baskets = baskets.drop(['eval_set', 'order_number'], axis=1)
 
 # 4.4 : Test total orders for user 1 
 user_1_baskets = baskets[baskets['user_id']==1]
@@ -107,6 +108,43 @@ print(baskets.isna().sum())
 
 # 4.3 : Update NaNs
 baskets['count_reorder_by_user'] = baskets['count_reorder_by_user'].fillna(0)
+baskets['count_reorder_product_by_user'] = baskets['count_reorder_product_by_user'].fillna(0)
+
+print(baskets.info(memory_usage='deep'))
+print(baskets.memory_usage(deep=True))
+
+# 4.4 : Reduce dataframe in order to test
+baskets = baskets.iloc[:20000]
+
+# --------------------------------------------------------------------------------------------------------------------------------
+
+# 5 : Build Input for the model
+
+input_y = np.asarray(baskets[['reordered']]['reordered'])
+input_x = baskets.drop(['add_to_cart_order', 'reordered', 'days_since_prior_order', 'order_dow', 'order_id', 'order_hour_of_day'], axis=1) 
+
+print(input_x.info(memory_usage='deep'))
+print(input_x.memory_usage(deep=True))
+
+# 5.1 : Create train and test set
+from sklearn.model_selection import train_test_split
+X_train, X_test, y_train, y_test = train_test_split(input_x, input_y, test_size=0.2)
+
+# --------------------------------------------------------------------------------------------------------------------------------
 
 
-# baskets = baskets.drop(['eval_set', 'add_to_cart_order', 'reordered', 'days_since_prior_order', 'order_dow', 'order_hour_of_day', 'order_id', 'order_number']) 
+# 6 : Random Forest Classification training
+
+from sklearn.ensemble import RandomForestClassifier
+clf_rf = RandomForestClassifier(random_state = 42)
+clf_rf.fit(X_train, y_train)
+
+# Use the resulting model to predict over the testing baskets
+prediction_result = clf_rf.predict(X_test)
+
+# See score
+print("Accuracy on test set: {:0.5f}".format(clf_rf.score(X_test, y_test)))
+
+# Report
+from sklearn.metrics import classification_report
+print(classification_report(y_test, prediction_result))
