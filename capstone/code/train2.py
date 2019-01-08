@@ -121,7 +121,7 @@ baskets = baskets.iloc[:20000]
 # 5 : Build Input for the model
 
 input_y = np.asarray(baskets[['reordered']]['reordered'])
-input_x = baskets.drop(['add_to_cart_order', 'reordered', 'days_since_prior_order', 'order_dow', 'order_id', 'order_hour_of_day'], axis=1) 
+input_x = baskets.drop(['add_to_cart_order', 'reordered', 'days_since_prior_order', 'order_id', 'order_hour_of_day'], axis=1) 
 
 print(input_x.info(memory_usage='deep'))
 print(input_x.memory_usage(deep=True))
@@ -132,7 +132,6 @@ X_train, X_test, y_train, y_test = train_test_split(input_x, input_y, test_size=
 
 # --------------------------------------------------------------------------------------------------------------------------------
 
-
 # 6 : Random Forest Classification training
 
 from sklearn.ensemble import RandomForestClassifier
@@ -141,10 +140,24 @@ clf_rf.fit(X_train, y_train)
 
 # Use the resulting model to predict over the testing baskets
 prediction_result = clf_rf.predict(X_test)
-
+print(' Random Forest Classification ')
 # See score
 print("Accuracy on test set: {:0.5f}".format(clf_rf.score(X_test, y_test)))
 
 # Report
 from sklearn.metrics import classification_report
 print(classification_report(y_test, prediction_result))
+
+# --------------------------------------------------------------------------------------------------------------------------------
+
+# 7 : Naive Bayes training
+
+from sklearn.naive_bayes import GaussianNB
+clf_nb = GaussianNB()
+clf_nb.fit(X_train, y_train)
+prediction_clf_nb = clf_nb.predict(X_test)
+print(' Naive Bayes ')
+
+# Report
+print("Accuracy on test set: {:0.5f}".format(clf_nb.score(X_test, y_test)))
+print(classification_report(y_test, prediction_clf_nb))
