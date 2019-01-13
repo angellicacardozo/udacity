@@ -92,6 +92,43 @@ print(products_preferences.isna().sum())
 
 # --------------------------------------------------------------------------------------------------------------------------------
 
+# :: Calculating freq for morning, evening and night consumption
+
+morning = orders['order_hour_of_day'] <= 10
+night = orders['order_hour_of_day'] > 16
+
+morning_orders = orders[morning]
+night_orders = orders[night]
+
+total_orders = len(orders)
+total_morning_orders = len(morning_orders)
+total_nigth_orders = len(night_orders)
+total_evening_orders = total_orders - (total_morning_orders + total_nigth_orders)
+
+freq_total_morning_orders = (total_morning_orders * 100)/total_orders
+freq_total_evening_orders = (total_evening_orders * 100)/total_orders
+freq_total_nigth_orders = (total_nigth_orders * 100)/total_orders
+
+general_user_behavior['freq_total_morning_orders'] = freq_total_morning_orders
+general_user_behavior['freq_total_evening_orders'] = freq_total_evening_orders
+general_user_behavior['freq_total_nigth_orders'] = freq_total_nigth_orders
+
+# --------------------------------------------------------------------------------------------------------------------------------
+
+# :: Create indicator for weekend
+
+orders['is_weekend'] = np.where(orders['order_dow'] <= 1, 1, 0)
+weekend_df = orders[['order_id', 'is_weekend']]
+
+products_preferences = pandas.merge(weekend_df, products_preferences, on='order_id', how='right', validate='one_to_many')
+
+
+# --------------------------------------------------------------------------------------------------------------------------------
+
+# :: Preference by a product based on days_since_prior (recurrence of purchase)
+
+# --------------------------------------------------------------------------------------------------------------------------------
+
 # 4 : Build Basket set
 
 baskets = pandas.merge(general_user_behavior, products_preferences, on=['user_id'], how='right', validate='one_to_many')
@@ -118,23 +155,61 @@ baskets = baskets.iloc[:20000]
 
 # --------------------------------------------------------------------------------------------------------------------------------
 
+# Random Hyperparameter Grid
+
+# 1 : Create a parameter grid to sample
+from sklearn.model_selection import RandomizedSearchCV
+
+n_estimators = [int(x) for x in np.linspace(start = 200, stop = 2000, num = 10)]
+max_features = ['auto', 'sqrt']
+max_depth = [int(x) for x in np.linspace(10, 110, num = 11)]
+max_depth.append(None)
+min_samples_split = [2, 5, 10]
+min_samples_leaf = [1, 2, 4]
+bootstrap = [True, False]
+
+random_grid = {'n_estimators': n_estimators,
+               'max_features': max_features,
+               'max_depth': max_depth,
+               'min_samples_split': min_samples_split,
+               'min_samples_leaf': min_samples_leaf,
+               'bootstrap': bootstrap}
+
+# --------------------------------------------------------------------------------------------------------------------------------
+
 # 5 : Build Input for the model
 
 input_y = np.asarray(baskets[['reordered']]['reordered'])
-input_x = baskets.drop(['add_to_cart_order', 'reordered', 'days_since_prior_order', 'order_id', 'order_hour_of_day'], axis=1) 
+input_x = baskets.drop(['add_to_cart_order', 'reordered', 'days_since_prior_order', 'order_id'], axis=1) 
 
 print(input_x.info(memory_usage='deep'))
 print(input_x.memory_usage(deep=True))
+
+from sklearn.ensemble import RandomForestClassifier
+
+# --------------------------------------------------------------------------------------------------------------------------------
+
+# Search for the best hps
 
 # 5.1 : Create train and test set
 from sklearn.model_selection import train_test_split
 X_train, X_test, y_train, y_test = train_test_split(input_x, input_y, test_size=0.2)
 
+random_classifier = RandomForestClassifier()
+rf_random = RandomizedSearchCV(estimator = random_classifier, 
+                               param_distributions = random_grid, 
+                               n_iter = 100, cv = 3, 
+                               verbose=2, 
+                               random_state=42, 
+                               n_jobs = -1)
+rf_random.fit(X_train, y_train)
+
+print(rf_random.best_params_)
+
 # --------------------------------------------------------------------------------------------------------------------------------
 
 # 6 : Random Forest Classification training
 
-from sklearn.ensemble import RandomForestClassifier
 clf_rf = RandomForestClassifier(random_state = 42)
 clf_rf.fit(X_train, y_train)
 
@@ -148,6 +223,11 @@ print("Accuracy on test set: {:0.5f}".format(clf_rf.score(X_test, y_test)))
 from sklearn.metrics import classification_report
 print(classification_report(y_test, prediction_result))
 
+best_random_rf = rf_random.best_estimator_
+prediction_result_best_random_rf = best_random_rf.predict(X_test)
+# See score
+print("Accuracy on test set for random parameters: {:0.5f}".format(best_random_rf.score(X_test, y_test)))
+print(classification_report(y_test, prediction_result_best_random_rf))
 # --------------------------------------------------------------------------------------------------------------------------------
 
 # 7 : Naive Bayes training
@@ -161,3 +241,22 @@ print(' Naive Bayes ')
 # Report
 print("Accuracy on test set: {:0.5f}".format(clf_nb.score(X_test, y_test)))
 print(classification_report(y_test, prediction_clf_nb))
+
+# --------------------------------------------------------------------------------------------------------------------------------
+
+features = input_x.columns
+
+predict_proba_rf = best_random_rf.predict_proba(X_test[features])[0:10]
+ft_importance = list(zip(X_train[features], best_random_rf.feature_importances_))
+
+# --------------------------------------------------------------------------------------------------------------------------------
+
+top_ten_x_test = np.array(X_test[features]['product_id'][0:10])
+tested_products = products.loc[products['product_id'].isin(top_ten_x_test)]
+probs_df = pandas.DataFrame({'n_recommended': predict_proba_rf[:,0], 'recommended': predict_proba_rf[:,1]})
+
+merged = pandas.merge(tested_products, X_test[0:10], on=['product_id'], how='left', validate='one_to_one')
+merged = pandas.concat([merged, probs_df], axis=1)
+
+to_file = merged.drop(['aisle_id', 'department_id', 'user_id', 'count_reorder_product_by_user', 'count_reorder_by_user', 'count_orders_by_user', 'freq_total_morning_orders', 'freq_total_evening_orders', 'freq_total_nigth_orders', 'is_weekend', 'count_general_item_reorder_freq'], axis=1)
+to_file.to_csv('final_result_example.csv', encoding='utf-8', index=False)
